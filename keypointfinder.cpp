@@ -28,6 +28,8 @@
 #include <vtkDoubleArray.h>
 #include <vtkCellArray.h>
 #include <vtkProperty.h>
+#include <vtkSurfaceReconstructionFilter.h>
+#include <vtkContourFilter.h>
 
 
 #include <iostream>
@@ -129,46 +131,6 @@ std::vector<PointWithLabel> mergePointSets(const std::vector<Eigen::Vector3d>& s
     return mergedPoints;
 }
 
-// 四次多项式拟合：拟合四次曲面 z = ax^4 + by^4 + cx^3y + dxy^3 + ex^3 + fy^3 + gx^2y^2 + hx^2y + ixy^2 + jx^2 + ky^2 + lxy + mx + ny + o
-Eigen::VectorXd fitQuarticSurface(const std::vector<Eigen::Vector3d>& points) {
-    int num_points = points.size();
-
-    // 构建设计矩阵 X 和响应向量 Z，15 个多项式系数
-    Eigen::MatrixXd X(num_points, 15);  // 15 个多项式系数: a, b, c, d, e, f, g, h, i, j, k, l, m, n, o
-    Eigen::VectorXd Z(num_points);      // z 值
-
-    for (int i = 0; i < num_points; ++i) {
-        double x = points[i][0];
-        double y = points[i][1];
-        double z = points[i][2];
-
-        // 多项式系数的设计矩阵 X
-        X(i, 0)  = x * x * x * x;  // x^4
-        X(i, 1)  = y * y * y * y;  // y^4
-        X(i, 2)  = x * x * x * y;  // x^3y
-        X(i, 3)  = x * y * y * y;  // xy^3
-        X(i, 4)  = x * x * x;      // x^3
-        X(i, 5)  = y * y * y;      // y^3
-        X(i, 6)  = x * x * y * y;  // x^2y^2
-        X(i, 7)  = x * x * y;      // x^2y
-        X(i, 8)  = x * y * y;      // xy^2
-        X(i, 9)  = x * x;          // x^2
-        X(i, 10) = y * y;          // y^2
-        X(i, 11) = x * y;          // xy
-        X(i, 12) = x;              // x
-        X(i, 13) = y;              // y
-        X(i, 14) = 1.0;            // 常数项
-
-        // z 值
-        Z(i) = z;
-    }
-
-    // 求解最小二乘问题 X * beta = Z，得到拟合系数 beta
-    Eigen::VectorXd beta = X.colPivHouseholderQr().solve(Z);
-
-    return beta;  // 返回拟合的系数: [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o]
-}
-
 
 vtkSmartPointer<vtkPolyData> vec_to_poly(std::vector<Eigen::Vector3d> points){
     // 创建 VTK 点集
@@ -183,66 +145,6 @@ vtkSmartPointer<vtkPolyData> vec_to_poly(std::vector<Eigen::Vector3d> points){
 
     return polyData;
 }
-
-vtkSmartPointer<vtkPolyData> visualizeQuarticSurface(const Eigen::VectorXd& beta, double bounds[6], int resolution) {
-    // 1. 创建 VTK 点集
-    vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
-    vtkSmartPointer<vtkCellArray> triangles = vtkSmartPointer<vtkCellArray>::New();
-
-    double xMin = bounds[0];
-    double xMax = bounds[1];
-    double yMin = bounds[2];
-    double yMax = bounds[3];
-
-    // 网格划分
-    double dx = (xMax - xMin) / (resolution - 1);
-    double dy = (yMax - yMin) / (resolution - 1);
-
-    std::vector<std::vector<vtkIdType>> pointIds(resolution, std::vector<vtkIdType>(resolution));
-
-    // 2. 生成网格点并计算 z 值
-    for (int i = 0; i < resolution; ++i) {
-        for (int j = 0; j < resolution; ++j) {
-            double x = xMin + i * dx;
-            double y = yMin + j * dy;
-
-            // 根据拟合的多项式系数计算 z 值 (四次曲面)
-            double z = beta[0] * x * x * x * x + beta[1] * y * y * y * y + beta[2] * x * x * x * y + 
-                       beta[3] * x * y * y * y + beta[4] * x * x * x + beta[5] * y * y * y + 
-                       beta[6] * x * x * y * y + beta[7] * x * x * y + beta[8] * x * y * y + 
-                       beta[9] * x * x + beta[10] * y * y + beta[11] * x * y + beta[12] * x + 
-                       beta[13] * y + beta[14];
-
-            // 插入点到 VTK 点集中
-            pointIds[i][j] = points->InsertNextPoint(x, y, z);
-        }
-    }
-
-    // 3. 生成三角形网格
-    for (int i = 0; i < resolution - 1; ++i) {
-        for (int j = 0; j < resolution - 1; ++j) {
-            vtkSmartPointer<vtkTriangle> triangle1 = vtkSmartPointer<vtkTriangle>::New();
-            triangle1->GetPointIds()->SetId(0, pointIds[i][j]);
-            triangle1->GetPointIds()->SetId(1, pointIds[i + 1][j]);
-            triangle1->GetPointIds()->SetId(2, pointIds[i][j + 1]);
-
-            vtkSmartPointer<vtkTriangle> triangle2 = vtkSmartPointer<vtkTriangle>::New();
-            triangle2->GetPointIds()->SetId(0, pointIds[i + 1][j + 1]);
-            triangle2->GetPointIds()->SetId(1, pointIds[i][j + 1]);
-            triangle2->GetPointIds()->SetId(2, pointIds[i + 1][j]);
-
-            triangles->InsertNextCell(triangle1);
-            triangles->InsertNextCell(triangle2);
-        }
-    }
-
-    // 4. 创建 PolyData 并设置点集和三角形网格
-    vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
-    polyData->SetPoints(points);
-    polyData->SetPolys(triangles);
-    return polyData;
-}
-
 
 
 std::vector<Eigen::Vector3d> Filter_points(std::vector<Eigen::Vector3d> points,double bounds[6]){
@@ -398,6 +300,24 @@ vtkSmartPointer<vtkPolyData> visualizeRBF(const Eigen::VectorXd& weights, const 
     return polyData;
 }
 
+void calculateBounds(const std::vector<Eigen::Vector3d>& points, double bounds[6]) {
+    if (points.empty()) return;
+
+    bounds[0] = bounds[1] = points[0][0];
+    bounds[2] = bounds[3] = points[0][1];
+    bounds[4] = bounds[5] = points[0][2];
+
+    for (const auto& point : points) {
+        if (point[0] < bounds[0]) bounds[0] = point[0];
+        if (point[0] > bounds[1]) bounds[1] = point[0];
+        if (point[1] < bounds[2]) bounds[2] = point[1];
+        if (point[1] > bounds[3]) bounds[3] = point[1];
+        if (point[2] < bounds[4]) bounds[4] = point[2];
+        if (point[2] > bounds[5]) bounds[5] = point[2];
+    }
+}
+
+
 
 
 int main() {
@@ -424,7 +344,7 @@ int main() {
     auto rb3v = reader3->GetOutput();
     auto rf_up_v = reader4->GetOutput();
     auto rf_down_v = reader5->GetOutput();
-    auto exc_rfd = mergePolyData(rb1v,rb2v,rb3v,rf_up_v);
+    auto exc_rfd = mergePolyData(rb1v,rb3v,rf_up_v,rf_down_v);
 
     
     double boundsv1[6];
@@ -433,7 +353,7 @@ int main() {
     cout<<"r1v1 range:\n"<<"x:("<<boundsv1[0]<<","<<boundsv1[1]<<")\n";
     cout<<"y:("<<boundsv1[2]<<","<<boundsv1[3]<<")\n";
     cout<<"z:("<<boundsv1[4]<<","<<boundsv1[5]<<")\n";
-    rf_down_v->GetBounds(boundsv2);
+    rb2v->GetBounds(boundsv2);
     cout<<"r1v1 range:\n"<<"x:("<<boundsv2[0]<<","<<boundsv2[1]<<")\n";
     cout<<"y:("<<boundsv2[2]<<","<<boundsv2[3]<<")\n";
     cout<<"z:("<<boundsv2[4]<<","<<boundsv2[5]<<")\n";
@@ -442,7 +362,7 @@ int main() {
     max_bounds(boundsv1,boundsv2,mbounds);
 
     auto pointsvector1 = extractpoints(exc_rfd);
-    auto pointsvector2 = extractpoints(rf_down_v);
+    auto pointsvector2 = extractpoints(rb2v);
 
     // 合并点集并标记点的归属
     auto points = mergePointSets(pointsvector1, pointsvector2);
@@ -504,23 +424,6 @@ int main() {
     
     auto filtered_points = Filter_points(points_for_fitting,mbounds);
     cout<<"size_processed = "<<filtered_points.size()<<"\n";
-/*
-    // 计算 RBF 权重
-    double sigma = 1.0;  // 设置高斯核的 sigma 参数
-    Eigen::VectorXd weights = fitRBF(filtered_points, sigma);
-
-    // 生成 RBF 拟合的曲面
-    vtkSmartPointer<vtkPolyData> rbf_polyData = visualizeRBF(weights, filtered_points, mbounds, 50, sigma);
-
-    // 创建映射器和演员
-    vtkSmartPointer<vtkPolyDataMapper> mapper_rbf = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper_rbf->SetInputData(rbf_polyData);
-
-    vtkSmartPointer<vtkActor> actor_rbf = vtkSmartPointer<vtkActor>::New();
-    actor_rbf->SetMapper(mapper_rbf);
-    actor_rbf->GetProperty()->SetOpacity(0.7);
-    actor_rbf->GetProperty()->SetColor(0.0, 1.0, 0.0);  // 将颜色设置为绿色
-*/
     
 
 
@@ -558,7 +461,7 @@ int main() {
     actor_points->SetMapper(mapper_points);
     actor_points->GetProperty()->SetColor(1.0, 0.0, 0.0);  // 将点集设置为红色
     actor_points->GetProperty()->SetPointSize(2);  // 设置点的大小
-
+/*
     // 体素大小
     double voxelSize = 1.0;
     // 定义体数据网格大小（根据你的点云数据调整大小）
@@ -583,19 +486,22 @@ int main() {
     vtkSmartPointer<vtkActor> actor = vtkSmartPointer<vtkActor>::New();
     actor->SetMapper(mapper);
     actor->GetProperty()->SetOpacity(0.7);
-
-/* // 拟合平面
-    auto beta = fitQuarticSurface(filtered_points);
-    auto polyData_plane = visualizeQuarticSurface(beta,mbounds,50);
-
-    vtkSmartPointer<vtkPolyDataMapper> mapper_plane = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper_plane->SetInputData(polyData_plane);
-
-    vtkSmartPointer<vtkActor> actor_plane = vtkSmartPointer<vtkActor>::New();
-    actor_plane->SetMapper(mapper_plane);
-    actor_plane->GetProperty()->SetOpacity(0.7);  // 设置透明度
-    actor_plane->GetProperty()->SetColor(1.0,0.0,0.0);  // 设置透明度
 */
+    
+    vtkSmartPointer<vtkSurfaceReconstructionFilter> surfaceReconstruction = vtkSmartPointer<vtkSurfaceReconstructionFilter>::New();
+    surfaceReconstruction->SetInputData(polyData_points);
+    surfaceReconstruction->Update();
+
+    vtkSmartPointer<vtkContourFilter> contourFilter = vtkSmartPointer<vtkContourFilter>::New();
+    contourFilter->SetInputConnection(surfaceReconstruction->GetOutputPort());
+    contourFilter->SetValue(0, 0.0);
+    contourFilter->Update();
+
+    vtkSmartPointer<vtkPolyDataMapper> mapper_vtk = vtkSmartPointer<vtkPolyDataMapper>::New();
+    mapper_vtk->SetInputConnection(contourFilter->GetOutputPort());
+    vtkSmartPointer<vtkActor> actor_vtk = vtkSmartPointer<vtkActor>::New();
+    actor_vtk->SetMapper(mapper_vtk);
+
 
     // 创建第一个映射器和演员
     vtkSmartPointer<vtkPolyDataMapper> mapper1 = vtkSmartPointer<vtkPolyDataMapper>::New();
@@ -607,7 +513,7 @@ int main() {
 
     // 创建第二个映射器和演员
     vtkSmartPointer<vtkPolyDataMapper> mapper2 = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper2->SetInputConnection(reader5->GetOutputPort());
+    mapper2->SetInputConnection(reader2->GetOutputPort());
 
     vtkSmartPointer<vtkActor> actor2 = vtkSmartPointer<vtkActor>::New();
     actor2->SetMapper(mapper2);
@@ -666,8 +572,8 @@ int main() {
     renderer->AddActor(actor3);
     renderer->AddActor(actor4);
     renderer->AddActor(actor5);
-    renderer->AddActor(actor);
-    //renderer->AddActor(actor_plane);  // 拟合平面
+    //renderer->AddActor(actor);
+    renderer->AddActor(actor_vtk);  // 拟合平面
     renderer->AddActor(actor_points);
     //renderer->AddActor(actor_rbf);
 
@@ -686,6 +592,8 @@ int main() {
 
     /*
     目前尝试了四次拟合，仍然不理想，接下来可以尝试下vtk的行进立方，或者其他什么办法
+
+    或者换一下切割顺序，简化一下右前下段的切割面复杂度
     */    
 
     /*auto polydata = vec_to_poly(points_for_fitting);

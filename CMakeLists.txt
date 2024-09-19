@@ -4,9 +4,10 @@
 set(SOURCE_FILES
     #main.cpp       # 主程序文件，包含main函数
     #source/keypoint.cpp   # keypoint模块实现文件
-    keypointfinder.cpp  # 其他模块实现文件
+    #keypointfinder.cpp  # 其他模块实现文件
     #source/STL2OFF.cpp    # 其他模块实现文件
     #source/skeletonize.cpp # 其他模块实现文件
+    test.cpp
 )
 
 # 生成可执行文件，并使用源文件列表

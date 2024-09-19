@@ -1,5 +1,5 @@
-//根据stl集，写一下自动化的合并函数，然后依次应用find_points
-
+// 根据stl集，写一下自动化的合并函数，然后依次应用find_points
+// 目前看来切割有问题，平面拟合没问题，只可能是隐含函数和切割出问题了
 #include <vtkSmartPointer.h>
 #include <vtkRendererCollection.h>
 #include <vtkPointPicker.h>

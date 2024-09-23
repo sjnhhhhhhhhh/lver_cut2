@@ -33,6 +33,7 @@
 #include <vtkUnstructuredGrid.h>
 #include <vtkCommand.h>
 #include <vtkCamera.h>
+#include <vtkVoxelGrid.h>
 
 #include <iostream>
 #include <vector>
@@ -256,19 +257,40 @@ void max_bounds(double bounds1[6], double bounds2[6], double mbounds[6]) {
     mbounds[5] = (bounds1[5] > bounds2[5]) ? bounds1[5] : bounds2[5];
 }
 
+std::vector<Eigen::Vector3d> uniformSampling(const std::vector<Eigen::Vector3d>& points, size_t num_samples){
+    std::vector<Eigen::Vector3d> sampled_points;
+    size_t step = points.size() / num_samples;
+
+    for (size_t i = 0; i < points.size(); i += step) {
+        sampled_points.push_back(points[i]);
+    }
+
+    return sampled_points;    
+}
+
+// 函数：结合 vtkCleanPolyData 和 vtkVoxelGrid 进行点云去噪
+vtkSmartPointer<vtkPolyData> denoisePointCloud(vtkSmartPointer<vtkPolyData> inputPolyData) {
+    vtkSmartPointer<vtkVoxelGrid> voxelGrid = vtkSmartPointer<vtkVoxelGrid>::New();
+    voxelGrid->SetInputData(inputPolyData);
+    voxelGrid->SetLeafSize(1, 1, 1); // 设置体素大小
+    voxelGrid->Update();
+    
+    vtkSmartPointer<vtkPolyData> denoisedPolyData = voxelGrid->GetOutput();
+    return denoisedPolyData;
+}
+
 std::tuple<vtkSmartPointer<vtkPolyData>,std::vector<Eigen::Vector3d>>  find_points(vtkSmartPointer<vtkPolyData> input1, vtkSmartPointer<vtkPolyData> input2){
     // 获取最大边界，
     double boundsv1[6];
     double boundsv2[6];
     input1->GetBounds(boundsv1);
-    cout<<"r1v1 range:\n"<<"x:("<<boundsv1[0]<<","<<boundsv1[1]<<")\n";
-    cout<<"y:("<<boundsv1[2]<<","<<boundsv1[3]<<")\n";
+    //cout<<"r1v1 range:\n"<<"x:("<<boundsv1[0]<<","<<boundsv1[1]<<")\n";
+    //cout<<"y:("<<boundsv1[2]<<","<<boundsv1[3]<<")\n";
     input2->GetBounds(boundsv2);
-    cout<<"r1v1 range:\n"<<"x:("<<boundsv2[0]<<","<<boundsv2[1]<<")\n";
-    cout<<"y:("<<boundsv2[2]<<","<<boundsv2[3]<<")\n";
+    //cout<<"r1v1 range:\n"<<"x:("<<boundsv2[0]<<","<<boundsv2[1]<<")\n";
+    //cout<<"y:("<<boundsv2[2]<<","<<boundsv2[3]<<")\n";
     double mbounds[6];
     max_bounds(boundsv1,boundsv2,mbounds);
-
 
     // 合并点集，准备德拉内三角化
     auto pointsvector1 = extractpoints(input1);
@@ -324,9 +346,9 @@ std::tuple<vtkSmartPointer<vtkPolyData>,std::vector<Eigen::Vector3d>>  find_poin
     //size = 32404
     //cout<<"size = "<<points_for_fitting.size()<<"\n";
 
-    downsamplePoints(points_for_fitting,15);
+    // 均匀稀疏化
+    points_for_fitting = uniformSampling(points_for_fitting,10000);
     cout<<"size_processed = "<<points_for_fitting.size()<<"\n";
-
     
     auto filtered_points = Filter_points(points_for_fitting,mbounds);
     cout<<"size_processed = "<<filtered_points.size()<<"\n";
@@ -340,5 +362,7 @@ std::tuple<vtkSmartPointer<vtkPolyData>,std::vector<Eigen::Vector3d>>  find_poin
     vtkSmartPointer<vtkPolyData> polyData_points = vtkSmartPointer<vtkPolyData>::New();
     polyData_points->SetPoints(vtk_points);
 
-    return std::make_tuple(polyData_points,filtered_points);
+    auto vtk_points_denoise = denoisePointCloud(polyData_points);
+
+    return std::make_tuple(vtk_points_denoise,filtered_points);
 }

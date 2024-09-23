@@ -5,9 +5,12 @@ set(SOURCE_FILES
     #main.cpp       # 主程序文件，包含main函数
     #source/keypoint.cpp   # keypoint模块实现文件
     #keypointfinder.cpp  # 其他模块实现文件
+    #keypointfinder2.cpp
     #source/STL2OFF.cpp    # 其他模块实现文件
     #source/skeletonize.cpp # 其他模块实现文件
-    test.cpp
+    #test.cpp
+    #testopen3d.cpp
+    cut_test.cpp
 )
 
 # 生成可执行文件，并使用源文件列表
@@ -49,6 +52,21 @@ include("C:/source/eigen-3.4.0/cmake/UseEigen3.cmake")
 # 查找PCL库
 find_package(PCL CONFIG REQUIRED)
 target_link_libraries(liver_cut PRIVATE ${PCL_LIBRARIES})
+
+# 添加Open3D根目录路径到CMake的搜索路径
+list(APPEND CMAKE_PREFIX_PATH "C:/source/Open3d/open3d-devel-windows-amd64-0.17.0")
+
+find_package(Open3D REQUIRED)
+
+# 链接Open3D库
+target_link_libraries(liver_cut PRIVATE Open3D::Open3D)
+
+# 由于下载的Open3D是动态库，需要将Open3D.dll拷贝到执行文件的目录下，以下自定义指令完成了这一工作。
+add_custom_command(TARGET liver_cut POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+    "${Open3D_DIR}/../bin/Open3D.dll"
+    $<TARGET_FILE_DIR:liver_cut>)
+
 
 
 # 在目标创建后使用 vtk_module_autoinit

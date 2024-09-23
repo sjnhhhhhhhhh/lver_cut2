@@ -37,6 +37,8 @@
 #include <vtkPCANormalEstimation.h>
 #include <vtkSignedDistance.h>
 #include <vtkSurfaceReconstructionFilter.h>
+#include <vtkCleanPolyData.h>
+#include <vtkVoxelGrid.h>
 
 #include <iostream>
 #include <vector>
@@ -61,11 +63,11 @@
 
 #include <CGAL/Simple_cartesian.h>
 #include <CGAL/Delaunay_triangulation_3.h>
+#include <CGAL/Alpha_shape_3.h>
+
 
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
-
-#include <Open3D/Open3D.h>
 
 using namespace std;
 
@@ -74,6 +76,8 @@ typedef K::Point_3 Point_3;
 typedef CGAL::Delaunay_triangulation_3<K> Delaunay;
 typedef K::Segment_3 Segment_3;
 typedef K::Plane_3 Plane_3;
+typedef CGAL::Alpha_shape_3<K> Alpha_shape;
+
 
 struct PointWithLabel {
     Eigen::Vector3d point;
@@ -234,12 +238,11 @@ void calculateBounds(const std::vector<Eigen::Vector3d>& points, double bounds[6
     }
 }
 
-vtkSmartPointer<vtkImplicitPolyDataDistance> plane_generator(vtkSmartPointer<vtkPoints> vtk_points){
-    vtkSmartPointer<vtkPolyData> polyData_points = vtkSmartPointer<vtkPolyData>::New();
-    polyData_points->SetPoints(vtk_points);
+vtkSmartPointer<vtkImplicitPolyDataDistance> plane_generator(vtkSmartPointer<vtkPolyData> Poly_vtk_points){
+
 
     vtkSmartPointer<vtkSurfaceReconstructionFilter> surfaceReconstruction = vtkSmartPointer<vtkSurfaceReconstructionFilter>::New();
-    surfaceReconstruction->SetInputData(polyData_points);
+    surfaceReconstruction->SetInputData(Poly_vtk_points);
     surfaceReconstruction->Update();
 
     vtkSmartPointer<vtkContourFilter> contourFilter = vtkSmartPointer<vtkContourFilter>::New();
@@ -270,127 +273,16 @@ vtkSmartPointer<vtkPolyData> cut_run(vtkSmartPointer<vtkImplicitPolyDataDistance
     return clippedModel;
 }
 
-
-
-// 函数：将 Eigen 点集合转换为 Open3D 点云
-std::shared_ptr<open3d::geometry::PointCloud> EigenToOpen3DPointCloud(const std::vector<Eigen::Vector3d>& points) {
-    auto o3d_pcd = std::make_shared<open3d::geometry::PointCloud>();
-    for (const auto& point : points) {
-        o3d_pcd->points_.emplace_back(point[0], point[1], point[2]);
-    }
-    return o3d_pcd;
+// 函数：结合 vtkCleanPolyData 和 vtkVoxelGrid 进行点云去噪
+vtkSmartPointer<vtkPolyData> denoisePointCloud(vtkSmartPointer<vtkPolyData> inputPolyData, double cleanTolerance, double leafSizeX, double leafSizeY, double leafSizeZ) {
+    vtkSmartPointer<vtkVoxelGrid> voxelGrid = vtkSmartPointer<vtkVoxelGrid>::New();
+    voxelGrid->SetInputData(inputPolyData);
+    voxelGrid->SetLeafSize(leafSizeX, leafSizeY, leafSizeZ); // 设置体素大小
+    voxelGrid->Update();
+    
+    vtkSmartPointer<vtkPolyData> denoisedPolyData = voxelGrid->GetOutput();
+    return denoisedPolyData;
 }
-
-// 函数：使用 Open3D 进行泊松重建并将结果转换为 VTK PolyData
-
-
-vtkSmartPointer<vtkPolyData> PoissonReconstructionToVTK(std::shared_ptr<open3d::geometry::PointCloud> o3d_pcd, int depth) {
-    try {
-        // 检查点云是否为空
-        if (o3d_pcd->points_.empty()) {
-            throw std::runtime_error("Error: Point cloud is empty.");
-        }
-
-        // 估计法向量
-        o3d_pcd->EstimateNormals(open3d::geometry::KDTreeSearchParamHybrid(/*radius=*/5.0, /*max_nn=*/20));
-
-        // 检查法向量是否成功估计
-        if (o3d_pcd->normals_.empty()) {
-            throw std::runtime_error("Error: Failed to estimate normals.");
-        }
-
-        o3d_pcd->OrientNormalsConsistentTangentPlane(100);
-
-        // 执行泊松重建
-        auto [o3d_mesh, densities] = open3d::geometry::TriangleMesh::CreateFromPointCloudPoisson(*o3d_pcd, 5);
-
-        // 检查重建结果是否为空
-        if (o3d_mesh->vertices_.empty() || o3d_mesh->triangles_.empty()) {
-            throw std::runtime_error("Error: Poisson reconstruction failed.");
-        }
-
-        // 检查密度向量是否为空
-        if (densities.empty()) {
-            throw std::runtime_error("Error: Densities vector is empty.");
-        }
-
-        // 检查密度向量与顶点数量是否匹配
-        if (densities.size() != o3d_mesh->vertices_.size()) {
-            throw std::runtime_error("Error: Densities size does not match vertices size.");
-        }
-
-        // 根据密度移除低质量的部分（可选）
-        double min_density = *std::min_element(densities.begin(), densities.end());
-        double max_density = *std::max_element(densities.begin(), densities.end());
-        double density_threshold = min_density + (max_density - min_density) * 0.5;
-
-        std::vector<bool> remove_vertex_mask(densities.size());
-        for (size_t i = 0; i < densities.size(); ++i) {
-            remove_vertex_mask[i] = densities[i] < density_threshold;
-        }
-        o3d_mesh->RemoveVerticesByMask(remove_vertex_mask);
-
-        // 转换为 VTK 格式
-        vtkSmartPointer<vtkPolyData> vtk_mesh = vtkSmartPointer<vtkPolyData>::New();
-        vtkSmartPointer<vtkPoints> vtk_points = vtkSmartPointer<vtkPoints>::New();
-        vtkSmartPointer<vtkCellArray> vtk_triangles = vtkSmartPointer<vtkCellArray>::New();
-
-        for (const auto& vertex : o3d_mesh->vertices_) {
-            vtk_points->InsertNextPoint(vertex.x(), vertex.y(), vertex.z());
-        }
-
-        for (const auto& triangle : o3d_mesh->triangles_) {
-            // 检查索引有效性
-            if (triangle(0) < 0 || triangle(0) >= o3d_mesh->vertices_.size() ||
-                triangle(1) < 0 || triangle(1) >= o3d_mesh->vertices_.size() ||
-                triangle(2) < 0 || triangle(2) >= o3d_mesh->vertices_.size()) {
-                std::cerr << "Warning: Invalid triangle index found and skipped." << std::endl;
-                continue; // 跳过无效的三角形
-            }
-
-            vtkSmartPointer<vtkTriangle> vtk_triangle = vtkSmartPointer<vtkTriangle>::New();
-            vtk_triangle->GetPointIds()->SetId(0, triangle(0));
-            vtk_triangle->GetPointIds()->SetId(1, triangle(1));
-            vtk_triangle->GetPointIds()->SetId(2, triangle(2));
-            vtk_triangles->InsertNextCell(vtk_triangle);
-        }
-
-        vtk_mesh->SetPoints(vtk_points);
-        vtk_mesh->SetPolys(vtk_triangles);
-
-        return vtk_mesh;
-    } catch (const std::exception& e) {
-        std::cerr << "Exception in PoissonReconstructionToVTK: " << e.what() << std::endl;
-        return nullptr;
-    }
-}
-
-
-vtkSmartPointer<vtkImplicitPolyDataDistance> plane_generator2(const std::vector<Eigen::Vector3d>& filtered_points) {
-    // 检查输入点集合是否为空
-    if (filtered_points.empty()) {
-        std::cerr << "Error: filtered_points is empty." << std::endl;
-        return nullptr;
-    }
-
-    // 将 Eigen 点集合转换为 Open3D 点云
-    auto o3d_pcd = EigenToOpen3DPointCloud(filtered_points);
-
-    // 使用 Open3D 进行泊松重建并转换为 VTK 格式
-    vtkSmartPointer<vtkPolyData> reconstructedSurface = PoissonReconstructionToVTK(o3d_pcd, /*depth=*/5);
-
-    if (reconstructedSurface == nullptr || reconstructedSurface->GetNumberOfPoints() == 0) {
-        std::cerr << "Error: reconstructedSurface is empty." << std::endl;
-        return nullptr;
-    }
-
-    // 创建隐式函数
-    vtkSmartPointer<vtkImplicitPolyDataDistance> implicitFunction = vtkSmartPointer<vtkImplicitPolyDataDistance>::New();
-    implicitFunction->SetInput(reconstructedSurface);
-
-    return implicitFunction;
-}
-
 
 
 int main() {
@@ -478,7 +370,7 @@ int main() {
     auto rb3v = reader3->GetOutput();
     auto rf_up_v = reader4->GetOutput();
     auto rf_down_v = reader5->GetOutput();
-    auto exc_rfd = mergePolyData(rb3v,rb1v,rf_up_v,tail);
+    auto exc_rfd = mergePolyData(rb1v,rb2v,rb3v,rf_up_v,rf_down_v,left_inside_v,left_ou_v,left_od_v);
 
 
 
@@ -502,7 +394,7 @@ int main() {
 
 
     auto pointsvector1 = extractpoints(exc_rfd);
-    auto pointsvector2 = extractpoints(rb2v);
+    auto pointsvector2 = extractpoints(tail);
 
     // 合并点集并标记点的归属
     auto points = mergePointSets(pointsvector1, pointsvector2);
@@ -616,9 +508,14 @@ int main() {
     mapper_vtk->SetInputConnection(contourFilter->GetOutputPort());
     vtkSmartPointer<vtkActor> actor_vtk = vtkSmartPointer<vtkActor>::New();
     actor_vtk->SetMapper(mapper_vtk);*/
-
-    
-    auto imp = plane_generator2(filtered_points);
+    // 调用去噪函数
+    double cleanTolerance = 1; // 合并容差
+    double leafSizeX = 1; // 体素大小
+    double leafSizeY = 1;
+    double leafSizeZ = 1;
+    auto vtk_points_denoise = denoisePointCloud(polyData_points,cleanTolerance,leafSizeX,leafSizeY,leafSizeZ);
+    //std::cout<<"after denoise: "<<vtk_points_denoise->GetNumberOfPoints()<<"\n";
+    auto imp = plane_generator(vtk_points_denoise);
     if (imp == nullptr) {
         std::cerr << "Error: Failed to generate implicit function." << std::endl;
     }
@@ -716,6 +613,14 @@ int main() {
     actor9->SetMapper(mapper9);
     actor9->GetProperty()->SetOpacity(0.7);  // 设置透明度
 
+    // 创建第二个映射器和演员
+    vtkSmartPointer<vtkPolyDataMapper> mapper10 = vtkSmartPointer<vtkPolyDataMapper>::New();
+    mapper10->SetInputData(liver);
+
+    vtkSmartPointer<vtkActor> actor10 = vtkSmartPointer<vtkActor>::New();
+    actor10->SetMapper(mapper10);
+    actor10->GetProperty()->SetOpacity(0.7);  // 设置透明度
+
     // 创建一个平面源，并设置其方向和位置
     vtkSmartPointer<vtkPlaneSource> planeSource = vtkSmartPointer<vtkPlaneSource>::New();
     planeSource->SetCenter(centroid[0], centroid[1], centroid[2]);
@@ -745,7 +650,7 @@ int main() {
     renderer->AddActor(actor8);
     renderer->AddActor(actor9);
     renderer->AddActor(actor);
-    //renderer->AddActor(actor_vtk);  // 拟合平面
+    renderer->AddActor(actor10);  // 拟合平面
     renderer->AddActor(actor_points);
     //renderer->AddActor(actor_rbf);
 

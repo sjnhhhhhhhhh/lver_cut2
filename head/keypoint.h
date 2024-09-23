@@ -39,7 +39,14 @@ std::vector<Eigen::Vector3d> Filter_points(std::vector<Eigen::Vector3d> points, 
 // 计算两个边界框的最大范围
 void max_bounds(double bounds1[6], double bounds2[6], double mbounds[6]);
 
+std::vector<Eigen::Vector3d> uniformSampling(const std::vector<Eigen::Vector3d>& points, size_t num_samples);
+
 // 从两个 VTK 点云中查找关键点，并返回过滤后的点集和 VTK 格式的点集
 std::tuple<vtkSmartPointer<vtkPolyData>, std::vector<Eigen::Vector3d>> find_points(vtkSmartPointer<vtkPolyData> input1, vtkSmartPointer<vtkPolyData> input2);
+
+// 函数：结合 vtkCleanPolyData 和 vtkVoxelGrid 进行点云去噪
+vtkSmartPointer<vtkPolyData> denoisePointCloud(vtkSmartPointer<vtkPolyData> inputPolyData);
+
+
 
 #endif // KEYPOINT_H

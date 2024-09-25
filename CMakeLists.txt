@@ -2,15 +2,24 @@
 
 # 设置源文件列表，包括主程序和模块
 set(SOURCE_FILES
-    #main.cpp       # 主程序文件，包含main函数
-    #source/keypoint.cpp   # keypoint模块实现文件
+    main.cpp       # 主程序文件，包含main函数
+    source/liver_cut.cpp   # keypoint模块实现文件
+    source/cut_tail.cpp
+    source/cut_right_lobe.cpp
+    source/cut_left_lobe.cpp
+    source/cut_rb2b.cpp
+    source/cut_rb3b.cpp
+    source/cut_rf_up.cpp
+    source/cut_rb1b_rf_down.cpp
+    source/cut_left_inside.cpp
+    source/cut_left_ou_od.cpp
     #keypointfinder.cpp  # 其他模块实现文件
     #keypointfinder2.cpp
     #source/STL2OFF.cpp    # 其他模块实现文件
     #source/skeletonize.cpp # 其他模块实现文件
     #test.cpp
     #testopen3d.cpp
-    cut_test.cpp
+    #cut_test.cpp
 )
 
 # 生成可执行文件，并使用源文件列表

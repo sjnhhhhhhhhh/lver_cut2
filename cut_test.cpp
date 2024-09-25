@@ -1,4 +1,7 @@
-
+/*
+表面重构太复杂了，我们还是绕开这个问题吧
+先把肝从中间切开分成右半叶和左半叶，然后再细切，说不定可以避免拓扑问题
+*/
 #include <vtkSmartPointer.h>
 #include <vtkRendererCollection.h>
 #include <vtkPointPicker.h>
@@ -494,8 +497,9 @@ int main() {
     auto rf_up_v = reader4->GetOutput();
     auto rf_down_v = reader5->GetOutput();
     
-
-
+    
+    
+    // 第1刀，尾状段
     auto exc_tail = mergePolyData(rb1v,rb2v,rb3v,rf_up_v,rf_down_v,left_inside_v,left_ou_v,left_od_v);
     auto [cut_tail,cut_tail_points] = find_points(exc_tail,tail);
     auto imp1 = plane_generator(cut_tail);
@@ -507,94 +511,104 @@ int main() {
     std::cout << "Successfully saved" << std::endl;
     std::cout<<"\ntail cut completed\n";
 
-    // 第2刀，右后3段
+
+
+    // 第2刀，提取右半叶
+    auto exc_left_inside_v = mergePolyData(rf_up_v,rf_down_v,rb1v,rb2v,rb3v);
+    auto left_side = mergePolyData(left_inside_v,tail);
+    auto [cut_left_inside,cut_left_inside_points] = find_points(exc_left_inside_v,left_side); 
+    auto imp2 = plane_generator(cut_left_inside);
+    auto [liver_right,liver_left_pre] = cut_run2(imp2,liver1);
+
+    /*stlWriter->SetFileName("C:/code/liver_cut/new_stl/liver_right.stl");
+    stlWriter->SetInputData(liver_right);
+    stlWriter->Write();
+    std::cout << "Successfully saved" << std::endl;
+    std::cout<<"\nliver_right cut completed\n\n";*/
+
+    // 第3刀，提取左半叶
+    auto left_side_v = mergePolyData(left_inside_v,left_od_v,left_ou_v);
+    auto [cut_left_side,cut_left_side_points] = find_points(left_side_v,tail);
+    auto imp3 = plane_generator(cut_left_side);
+    auto [liver_left,t] = cut_run2(imp3,liver_left_pre);
+    /*stlWriter->SetFileName("C:/code/liver_cut/new_stl/liver_left.stl");
+    stlWriter->SetInputData(liver_left);
+    stlWriter->Write();
+    std::cout << "Successfully saved" << std::endl;
+    std::cout<<"\nliver_left cut completed\n\n";*/
+
+    // 第4刀，右后3段
     auto exc_rb3v = mergePolyData(rb1v,rb2v,rf_down_v,rf_up_v,tail);
     auto [rb3b,rb3b_points] = find_points(exc_rb3v,rb3v);
-    auto imp2 = plane_generator(rb3b);
-    auto [liver2,rb3b_poly] = cut_run2(imp2,liver1);
+    auto imp4 = plane_generator(rb3b);
+    auto [liver_r1,rb3b_poly] = cut_run2(imp4,liver_right);
     stlWriter->SetFileName("C:/code/liver_cut/new_stl/rb3b.stl");
     stlWriter->SetInputData(rb3b_poly);
     stlWriter->Write();
-    std::cout<<"\nrb3b cut completed\n";
+    std::cout<<"\nrb3b cut completed\n\n";
     
-    // 第3刀，右后2段
+    // 第5刀，右后2段
     auto exc_rb2v = mergePolyData(rb1v,rb3v,rf_up_v,tail);
     auto [rb2b,rb2b_points] = find_points(exc_rb2v,rb2v);
-    auto imp3 = plane_generator(rb2b);
-    auto [liver3,rb2b_poly] = cut_run2(imp3,liver2);
+    auto imp5 = plane_generator(rb2b);
+    auto [liver_r2,rb2b_poly] = cut_run2(imp5,liver_r1);
     stlWriter->SetFileName("C:/code/liver_cut/new_stl/rb2b.stl");
     stlWriter->SetInputData(rb2b_poly);
     stlWriter->Write();
     std::cout<<"\nrb2b cut completed\n";
 
-    // 第4刀，右后1段
-    auto exc_rb1v = mergePolyData(rf_down_v,rf_up_v,rb3v,tail);
-    auto [rb1b,rb1b_points] = find_points(exc_rb1v,rb1v);
-    auto imp4 = plane_generator(rb3b);
-    auto [liver4,rb1b_poly] = cut_run2(imp4,liver3);
-    stlWriter->SetFileName("C:/code/liver_cut/new_stl/rb1b.stl");
-    stlWriter->SetInputData(rb1b_poly);
-    stlWriter->Write();
-    std::cout<<"\nrb1b cut completed\n";
-
-    // 第5刀，右前上段
-    auto exc_rf_up_v = rf_down_v;
+    // 第6刀，右前上段
+    auto exc_rf_up_v = mergePolyData(rf_down_v,rb1v);
     auto [rf_up_b,rf_up_v_points] = find_points(exc_rf_up_v,rf_up_v);
-    auto imp5 = plane_generator(rf_up_v);
-    auto [liver5,rf_up_v_poly] = cut_run2(imp5,liver4);
+    auto imp6 = plane_generator(rf_up_b);
+    auto [liver_r3,rf_up_v_poly] = cut_run2(imp6,liver_r2);
     stlWriter->SetFileName("C:/code/liver_cut/new_stl/rf_up.stl");
     stlWriter->SetInputData(rf_up_v_poly);
     stlWriter->Write();
     std::cout<<"\nrf_up cut completed\n";
 
-    // 第6刀，右前下段
-    auto exc_rf_down_v = left_inside_v;
-    auto [rf_down_b,rf_down_v_points] = find_points(exc_rf_down_v,rf_down_v);
-    auto imp6 = plane_generator(rf_up_v);
-    auto [liver6,rf_down_v_poly] = cut_run2(imp6,liver5);
-    stlWriter->SetFileName("C:/code/liver_cut/new_stl/rf_down.stl");
-    stlWriter->SetInputData(rf_down_v_poly);
+    // 第7刀，右后1段与右前下段
+    auto [rb1b,rb1b_points] = find_points(rf_down_v,rb1v);
+    auto imp7 = plane_generator(rb1b);
+    auto [rf_down_poly,rb1b_poly] = cut_run2(imp7,liver_r3);
+    stlWriter->SetFileName("C:/code/liver_cut/new_stl/rb1b.stl");
+    stlWriter->SetInputData(rb1b_poly);
     stlWriter->Write();
-    std::cout<<"\nrf_down cut completed\n";
+    std::cout<<"\nrb1b cut completed\n\n";
 
-    // 第7刀，左内叶段
-    auto exc_left_inside_v = mergePolyData(left_ou_v,left_od_v);
-    auto [cut_left_inside,cut_left_inside_points] = find_points(exc_left_inside_v,left_inside_v); 
-    auto imp7 = plane_generator(cut_left_inside);
-    auto [liver7,left_inside_poly] = cut_run2(imp7,liver6);
+    stlWriter->SetFileName("C:/code/liver_cut/new_stl/rf_down.stl");
+    stlWriter->SetInputData(rf_down_poly);
+    stlWriter->Write();
+    std::cout<<"\nrf_down cut completed\n\n";
+
+    // 第8刀，左内叶段
+    auto exc_left_inside_v1 = mergePolyData(left_ou_v,left_od_v);
+    auto [cut_left_inside1,cut_left_inside_points1] = find_points(exc_left_inside_v1,left_inside_v); 
+    auto imp8 = plane_generator(cut_left_inside1);
+    auto [left_inside_poly,liver_l1] = cut_run2(imp8,liver_left);
     stlWriter->SetFileName("C:/code/liver_cut/new_stl/left_inside.stl");
     stlWriter->SetInputData(left_inside_poly);
     stlWriter->Write();
     std::cout << "Successfully saved" << std::endl;
     std::cout<<"\nleft_inside cut completed\n";
 
-    // 第8刀，左外叶上段
+    // 第9刀，左后上段和下段
     auto exc_left_ou_v = mergePolyData(left_od_v);
     auto [cut_left_ou,cut_left_ou_points] = find_points(exc_left_ou_v,left_ou_v); 
-    auto imp8 = plane_generator(cut_left_ou);
-    auto [liver8,left_ou_poly] = cut_run2(imp8,liver7);
-    vtkSmartPointer<vtkSTLWriter> stlWriter2 = vtkSmartPointer<vtkSTLWriter>::New();
-    stlWriter2->SetFileName("C:/code/liver_cut/new_stl/left_ou.stl");
-    stlWriter2->SetInputData(left_ou_poly);
-    stlWriter2->Write();
+    auto imp9 = plane_generator(cut_left_ou);
+    auto [left_od_poly,left_ou_poly] = cut_run2(imp9,liver_l1);
+    stlWriter->SetFileName("C:/code/liver_cut/new_stl/left_ou.stl");
+    stlWriter->SetInputData(left_ou_poly);
+    stlWriter->Write();
     std::cout << "Successfully saved" << std::endl;
     std::cout<<"left_ou cut completed\n";
-/*
-    // 第三刀，左外叶下段
-    auto exc_left_od_v = mergePolyData(left_inside_v,left_ou_v,tail);
-    auto [cut_left_od,cut_left_od_points] = find_points(exc_left_od_v,left_od_v); 
-    auto imp3 = plane_generator(cut_left_od_points);
-    auto [liver3,left_od_poly] = cut_run2(imp3,liver2);
+
     stlWriter->SetFileName("C:/code/liver_cut/new_stl/left_od.stl");
     stlWriter->SetInputData(left_od_poly);
     stlWriter->Write();
     std::cout << "Successfully saved" << std::endl;
-    std::cout<<"\nleftod cut completed\n";
-*/
-    auto left_od_poly = liver8;
-    stlWriter->SetFileName("C:/code/liver_cut/new_stl/left_od.stl");
-    stlWriter->SetInputData(left_od_poly);
-    stlWriter->Write();
+    std::cout<<"left_ou cut completed\n";
+
 
     return EXIT_SUCCESS;
 }

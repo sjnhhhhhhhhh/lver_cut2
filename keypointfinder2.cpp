@@ -69,6 +69,7 @@
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
 
+
 using namespace std;
 
 typedef CGAL::Simple_cartesian<double> K;
@@ -243,6 +244,7 @@ vtkSmartPointer<vtkImplicitPolyDataDistance> plane_generator(vtkSmartPointer<vtk
 
     vtkSmartPointer<vtkSurfaceReconstructionFilter> surfaceReconstruction = vtkSmartPointer<vtkSurfaceReconstructionFilter>::New();
     surfaceReconstruction->SetInputData(Poly_vtk_points);
+    //surfaceReconstruction->SetNeighborhoodSize(30);
     surfaceReconstruction->Update();
 
     vtkSmartPointer<vtkContourFilter> contourFilter = vtkSmartPointer<vtkContourFilter>::New();
@@ -370,7 +372,8 @@ int main() {
     auto rb3v = reader3->GetOutput();
     auto rf_up_v = reader4->GetOutput();
     auto rf_down_v = reader5->GetOutput();
-    auto exc_rfd = mergePolyData(rb1v,rb2v,rb3v,rf_up_v,rf_down_v,left_inside_v,left_ou_v,left_od_v);
+    auto exc_rfd = mergePolyData(rb1v,rf_down_v);
+    //auto left_side = mergePolyData(left_inside_v,tail);
 
 
 
@@ -394,7 +397,7 @@ int main() {
 
 
     auto pointsvector1 = extractpoints(exc_rfd);
-    auto pointsvector2 = extractpoints(tail);
+    auto pointsvector2 = extractpoints(rf_up_v);
 
     // 合并点集并标记点的归属
     auto points = mergePointSets(pointsvector1, pointsvector2);
@@ -491,7 +494,7 @@ int main() {
 
     vtkSmartPointer<vtkActor> actor_points = vtkSmartPointer<vtkActor>::New();
     actor_points->SetMapper(mapper_points);
-    actor_points->GetProperty()->SetColor(1.0, 0.0, 0.0);  // 将点集设置为红色
+    actor_points->GetProperty()->SetColor(0.0, 1.0, 0.0);  // 将点集设置为红色
     actor_points->GetProperty()->SetPointSize(2);  // 设置点的大小
     
     //拟合平面
@@ -536,7 +539,7 @@ int main() {
 
     vtkSmartPointer<vtkActor> actor = vtkSmartPointer<vtkActor>::New();
     actor->SetMapper(mapper);
-    actor->GetProperty()->SetColor(1.0, 0.0, 0.0); // 设置颜色，例如红色
+    actor->GetProperty()->SetColor(0.0, 1.0, 0.0); // 设置颜色，例如红色
 
     
 
@@ -650,7 +653,7 @@ int main() {
     renderer->AddActor(actor8);
     renderer->AddActor(actor9);
     renderer->AddActor(actor);
-    renderer->AddActor(actor10);  // 拟合平面
+    //renderer->AddActor(actor10);  // 拟合平面
     renderer->AddActor(actor_points);
     //renderer->AddActor(actor_rbf);
 

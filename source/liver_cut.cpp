@@ -1,3 +1,4 @@
+#include "liver_cut.h"
 #include <vtkSmartPointer.h>
 #include <vtkRendererCollection.h>
 #include <vtkPointPicker.h>
@@ -23,6 +24,31 @@
 #include <vtkTriangle.h>
 #include <vtkVertexGlyphFilter.h>
 #include <vtkPolyDataWriter.h>
+#include <vtkImageData.h>
+#include <vtkMarchingCubes.h>
+#include <vtkDoubleArray.h>
+#include <vtkCellArray.h>
+#include <vtkProperty.h>
+#include <vtkSurfaceReconstructionFilter.h>
+#include <vtkContourFilter.h>
+#include <vtkImplicitPolyDataDistance.h>
+#include <vtkClipPolyData.h>
+#include <vtkSampleFunction.h>
+#include <vtkAppendPolyData.h>
+#include <vtkPCANormalEstimation.h>
+#include <vtkSignedDistance.h>
+#include <vtkSurfaceReconstructionFilter.h>
+#include <vtkCleanPolyData.h>
+#include <vtkVoxelGrid.h>
+
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <tuple>
+#include <algorithm>
+#include <stdexcept> 
+
+
 #include <vtkPlane.h>
 #include <vtkCutter.h>
 #include <vtkLineSource.h>
@@ -33,37 +59,50 @@
 #include <vtkUnstructuredGrid.h>
 #include <vtkCommand.h>
 #include <vtkCamera.h>
-#include <vtkVoxelGrid.h>
-
-#include <iostream>
-#include <vector>
-#include <cmath>
-#include <tuple>
 #include <chrono>
-#include <unordered_map>
-
 #include <Eigen/Dense>
 
 #include <CGAL/Simple_cartesian.h>
 #include <CGAL/Delaunay_triangulation_3.h>
+#include <CGAL/Alpha_shape_3.h>
+
 
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
-
-#include "keypoint.h"
-
 using namespace std;
+// 将你的 filtered_points 转换为 vtkImageData
+vtkSmartPointer<vtkImageData> convertPointsToImageData(const std::vector<Eigen::Vector3d>& points, double voxelSize, int gridSize[3]) {
+    vtkSmartPointer<vtkImageData> imageData = vtkSmartPointer<vtkImageData>::New();
 
-typedef CGAL::Simple_cartesian<double> K;
-typedef K::Point_3 Point_3;
-typedef CGAL::Delaunay_triangulation_3<K> Delaunay;
-typedef K::Segment_3 Segment_3;
-typedef K::Plane_3 Plane_3;
+    // 设置体数据大小，体素间隔，和范围
+    imageData->SetDimensions(gridSize[0], gridSize[1], gridSize[2]);
+    imageData->SetSpacing(voxelSize, voxelSize, voxelSize);
+    imageData->AllocateScalars(VTK_DOUBLE, 1);
 
-/*struct PointWithLabel {
-    Eigen::Vector3d point;
-    int label; // 标识点所属的组：1表示第一组，2表示第二组
-};*/
+    // 初始化体数据为0
+    for (int z = 0; z < gridSize[2]; ++z) {
+        for (int y = 0; y < gridSize[1]; ++y) {
+            for (int x = 0; x < gridSize[0]; ++x) {
+                double* pixel = static_cast<double*>(imageData->GetScalarPointer(x, y, z));
+                *pixel = 0.0;
+            }
+        }
+    }
+
+    // 将 filtered_points 中的点设置为1，表示这些体素为表面
+    for (const auto& point : points) {
+        int x = static_cast<int>(point[0] / voxelSize);
+        int y = static_cast<int>(point[1] / voxelSize);
+        int z = static_cast<int>(point[2] / voxelSize);
+
+        if (x >= 0 && x < gridSize[0] && y >= 0 && y < gridSize[1] && z >= 0 && z < gridSize[2]) {
+            double* pixel = static_cast<double*>(imageData->GetScalarPointer(x, y, z));
+            *pixel = 1.0; // 标记体素为非零值，代表物体表面
+        }
+    }
+
+    return imageData;
+}
 
 // 提取STL文件中的点
 std::vector<Eigen::Vector3d> extractpoints(vtkSmartPointer<vtkPolyData> data) {
@@ -84,20 +123,6 @@ std::vector<PointWithLabel> mergePointSets(const std::vector<Eigen::Vector3d>& s
     std::vector<PointWithLabel> mergedPoints;
 
     for (const auto& point : set1) {
-        mergedPoints.push_back(PointWithLabel(point, 1));  // 使用显式构造函数
-    }
-    for (const auto& point : set2) {
-        mergedPoints.push_back(PointWithLabel(point, 2));  // 使用显式构造函数
-    }
-
-    return mergedPoints;
-}
-
-/*
-std::vector<PointWithLabel> mergePointSets(const std::vector<Eigen::Vector3d>& set1, const std::vector<Eigen::Vector3d>& set2) {
-    std::vector<PointWithLabel> mergedPoints;
-
-    for (const auto& point : set1) {
         mergedPoints.push_back({point, 1});
     }
     for (const auto& point : set2) {
@@ -105,61 +130,8 @@ std::vector<PointWithLabel> mergePointSets(const std::vector<Eigen::Vector3d>& s
     }
 
     return mergedPoints;
-}*/
-
-void downsamplePoints(std::vector<Eigen::Vector3d>& points, double leafSize) {
-    // 将 Eigen::Vector3d 点集转换为 PCL 的点云格式
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-    for (const auto& p : points) {
-        cloud->points.push_back(pcl::PointXYZ(p[0], p[1], p[2]));
-    }
-    
-    // 创建体素栅格滤波器
-    pcl::VoxelGrid<pcl::PointXYZ> sor;
-    sor.setInputCloud(cloud);
-    sor.setLeafSize(leafSize, leafSize, leafSize);
-
-    // 执行滤波
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZ>);
-    sor.filter(*cloud_filtered);
-
-    // 将滤波后的点云转换回 Eigen::Vector3d
-    points.clear();
-    for (const auto& p : cloud_filtered->points) {
-        points.push_back(Eigen::Vector3d(p.x, p.y, p.z));
-    }
 }
 
-// 二次多项式拟合：拟合二次曲面 z = ax^2 + by^2 + cxy + dx + ey + f
-Eigen::VectorXd fitPolynomialSurface(const std::vector<Eigen::Vector3d>& points) {
-    int num_points = points.size();
-
-    // 构建设计矩阵 X 和响应向量 Z
-    Eigen::MatrixXd X(num_points, 6);  // 6 个多项式系数: a, b, c, d, e, f
-    Eigen::VectorXd Z(num_points);     // z 值
-
-    for (int i = 0; i < num_points; ++i) {
-        double x = points[i][0];
-        double y = points[i][1];
-        double z = points[i][2];
-
-        // 多项式系数的设计矩阵 X
-        X(i, 0) = x * x;  // x^2
-        X(i, 1) = y * y;  // y^2
-        X(i, 2) = x * y;  // xy
-        X(i, 3) = x;      // x
-        X(i, 4) = y;      // y
-        X(i, 5) = 1.0;    // 常数项
-
-        // z 值
-        Z(i) = z;
-    }
-
-    // 求解最小二乘问题 X * beta = Z，得到拟合系数 beta
-    Eigen::VectorXd beta = X.colPivHouseholderQr().solve(Z);
-
-    return beta;  // 返回拟合的系数: [a, b, c, d, e, f]
-}
 
 vtkSmartPointer<vtkPolyData> vec_to_poly(std::vector<Eigen::Vector3d> points){
     // 创建 VTK 点集
@@ -175,60 +147,6 @@ vtkSmartPointer<vtkPolyData> vec_to_poly(std::vector<Eigen::Vector3d> points){
     return polyData;
 }
 
-// 可视化拟合的多项式曲面
-vtkSmartPointer<vtkPolyData> visualizePolynomialSurface(const Eigen::VectorXd& beta, double bounds[6], int resolution) {
-    // 1. 创建 VTK 点集
-    vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
-    vtkSmartPointer<vtkCellArray> triangles = vtkSmartPointer<vtkCellArray>::New();
-
-    double xMin = bounds[0];
-    double xMax = bounds[1];
-    double yMin = bounds[2];
-    double yMax = bounds[3];
-    // 网格划分
-    double dx = (xMax - xMin) / (resolution - 1);
-    double dy = (yMax - yMin) / (resolution - 1);
-
-    std::vector<std::vector<vtkIdType>> pointIds(resolution, std::vector<vtkIdType>(resolution));
-
-    // 2. 生成网格点并计算 z 值
-    for (int i = 0; i < resolution; ++i) {
-        for (int j = 0; j < resolution; ++j) {
-            double x = xMin + i * dx;
-            double y = yMin + j * dy;
-
-            // 根据拟合的多项式系数计算 z 值
-            double z = beta[0] * x * x + beta[1] * y * y + beta[2] * x * y + beta[3] * x + beta[4] * y + beta[5];
-
-            // 插入点到 VTK 点集中
-            pointIds[i][j] = points->InsertNextPoint(x, y, z);
-        }
-    }
-
-    // 3. 生成三角形网格
-    for (int i = 0; i < resolution - 1; ++i) {
-        for (int j = 0; j < resolution - 1; ++j) {
-            vtkSmartPointer<vtkTriangle> triangle1 = vtkSmartPointer<vtkTriangle>::New();
-            triangle1->GetPointIds()->SetId(0, pointIds[i][j]);
-            triangle1->GetPointIds()->SetId(1, pointIds[i + 1][j]);
-            triangle1->GetPointIds()->SetId(2, pointIds[i][j + 1]);
-
-            vtkSmartPointer<vtkTriangle> triangle2 = vtkSmartPointer<vtkTriangle>::New();
-            triangle2->GetPointIds()->SetId(0, pointIds[i + 1][j + 1]);
-            triangle2->GetPointIds()->SetId(1, pointIds[i][j + 1]);
-            triangle2->GetPointIds()->SetId(2, pointIds[i + 1][j]);
-
-            triangles->InsertNextCell(triangle1);
-            triangles->InsertNextCell(triangle2);
-        }
-    }
-
-    // 4. 创建 PolyData 并设置点集和三角形网格
-    vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
-    polyData->SetPoints(points);
-    polyData->SetPolys(triangles);
-    return polyData;
-}
 
 std::vector<Eigen::Vector3d> Filter_points(std::vector<Eigen::Vector3d> points,double bounds[6]){
     std::vector<Eigen::Vector3d> filteredPoints;
@@ -257,7 +175,28 @@ void max_bounds(double bounds1[6], double bounds2[6], double mbounds[6]) {
     mbounds[5] = (bounds1[5] > bounds2[5]) ? bounds1[5] : bounds2[5];
 }
 
-std::vector<Eigen::Vector3d> uniformSampling(const std::vector<Eigen::Vector3d>& points, size_t num_samples){
+// 可变参数模板函数，用于合并任意数量的 vtkPolyData 对象
+/*template <typename... PolyDataTypes>
+vtkSmartPointer<vtkPolyData> mergePolyData(const PolyDataTypes&... inputs) {
+    vtkSmartPointer<vtkAppendPolyData> appendFilter = vtkSmartPointer<vtkAppendPolyData>::New();
+
+    // Lambda 表达式将每个输入添加到 appendFilter
+    auto addInput = [&](const vtkSmartPointer<vtkPolyData>& input) {
+        appendFilter->AddInputData(input);
+    };
+
+    // 使用折叠表达式遍历所有传入的 vtkPolyData 对象
+    (addInput(inputs), ...);
+
+    appendFilter->Update();
+
+    vtkSmartPointer<vtkPolyData> mergedPolyData = vtkSmartPointer<vtkPolyData>::New();
+    mergedPolyData->ShallowCopy(appendFilter->GetOutput());
+
+    return mergedPolyData;
+}*/
+
+std::vector<Eigen::Vector3d> uniformSampling(const std::vector<Eigen::Vector3d>& points, size_t num_samples) {
     std::vector<Eigen::Vector3d> sampled_points;
     size_t step = points.size() / num_samples;
 
@@ -265,36 +204,116 @@ std::vector<Eigen::Vector3d> uniformSampling(const std::vector<Eigen::Vector3d>&
         sampled_points.push_back(points[i]);
     }
 
-    return sampled_points;    
+    return sampled_points;
+}
+
+void calculateBounds(const std::vector<Eigen::Vector3d>& points, double bounds[6]) {
+    if (points.empty()) return;
+
+    bounds[0] = bounds[1] = points[0][0];
+    bounds[2] = bounds[3] = points[0][1];
+    bounds[4] = bounds[5] = points[0][2];
+
+    for (const auto& point : points) {
+        if (point[0] < bounds[0]) bounds[0] = point[0];
+        if (point[0] > bounds[1]) bounds[1] = point[0];
+        if (point[1] < bounds[2]) bounds[2] = point[1];
+        if (point[1] > bounds[3]) bounds[3] = point[1];
+        if (point[2] < bounds[4]) bounds[4] = point[2];
+        if (point[2] > bounds[5]) bounds[5] = point[2];
+    }
+}
+
+vtkSmartPointer<vtkImplicitPolyDataDistance> plane_generator(vtkSmartPointer<vtkPolyData> Poly_vtk_points){
+
+
+    vtkSmartPointer<vtkSurfaceReconstructionFilter> surfaceReconstruction = vtkSmartPointer<vtkSurfaceReconstructionFilter>::New();
+    surfaceReconstruction->SetInputData(Poly_vtk_points);
+    surfaceReconstruction->Update();
+
+    vtkSmartPointer<vtkContourFilter> contourFilter = vtkSmartPointer<vtkContourFilter>::New();
+    contourFilter->SetInputConnection(surfaceReconstruction->GetOutputPort());
+    contourFilter->SetValue(0, 0.0);
+    contourFilter->Update();
+
+    // 获取拟合曲面的 vtkPolyData
+    vtkSmartPointer<vtkPolyData> fittedSurface = contourFilter->GetOutput();
+
+    // 创建一个隐式函数
+    vtkSmartPointer<vtkImplicitPolyDataDistance> implicitFunction = vtkSmartPointer<vtkImplicitPolyDataDistance>::New();
+    implicitFunction->SetInput(fittedSurface);
+
+
+    return implicitFunction;
+}
+
+vtkSmartPointer<vtkPolyData> cut_run(vtkSmartPointer<vtkImplicitPolyDataDistance> implicitFunction, vtkSmartPointer<vtkPolyData> liver){
+
+    vtkSmartPointer<vtkClipPolyData> clipper = vtkSmartPointer<vtkClipPolyData>::New();
+    clipper->SetInputData(liver);
+    clipper->SetClipFunction(implicitFunction);
+    clipper->SetInsideOut(true); // 保留切下来的部分（小块）
+    clipper->Update();
+
+    vtkSmartPointer<vtkPolyData> clippedModel = clipper->GetOutput();
+    return clippedModel;
 }
 
 // 函数：结合 vtkCleanPolyData 和 vtkVoxelGrid 进行点云去噪
-vtkSmartPointer<vtkPolyData> denoisePointCloud(vtkSmartPointer<vtkPolyData> inputPolyData) {
+vtkSmartPointer<vtkPolyData> denoisePointCloud(vtkSmartPointer<vtkPolyData> inputPolyData, double cleanTolerance, double leafSizeX, double leafSizeY, double leafSizeZ) {
     vtkSmartPointer<vtkVoxelGrid> voxelGrid = vtkSmartPointer<vtkVoxelGrid>::New();
     voxelGrid->SetInputData(inputPolyData);
-    voxelGrid->SetLeafSize(1, 1, 1); // 设置体素大小
+    voxelGrid->SetLeafSize(leafSizeX, leafSizeY, leafSizeZ); // 设置体素大小
     voxelGrid->Update();
     
     vtkSmartPointer<vtkPolyData> denoisedPolyData = voxelGrid->GetOutput();
     return denoisedPolyData;
 }
 
+std::tuple<vtkSmartPointer<vtkPolyData>,vtkSmartPointer<vtkPolyData>>cut_run2(vtkSmartPointer<vtkImplicitPolyDataDistance> implicitFunction, vtkSmartPointer<vtkPolyData> liver){
+    // 1. 获取裁剪后的主要部分
+    vtkSmartPointer<vtkClipPolyData> clipperMain = vtkSmartPointer<vtkClipPolyData>::New();
+    clipperMain->SetInputData(liver);
+    clipperMain->SetClipFunction(implicitFunction);
+    clipperMain->SetInsideOut(false); // 保留外部部分
+    clipperMain->Update();
+    vtkSmartPointer<vtkPolyData> mainModel = clipperMain->GetOutput();
+
+    // 2. 获取被切下的小块
+    vtkSmartPointer<vtkClipPolyData> clipperCut = vtkSmartPointer<vtkClipPolyData>::New();
+    clipperCut->SetInputData(liver);
+    clipperCut->SetClipFunction(implicitFunction);
+    clipperCut->SetInsideOut(true); // 保留内部部分
+    clipperCut->Update();
+    vtkSmartPointer<vtkPolyData> cutOffPiece = clipperCut->GetOutput();
+
+    return std::make_tuple(mainModel,cutOffPiece);
+
+}
+
 std::tuple<vtkSmartPointer<vtkPolyData>,std::vector<Eigen::Vector3d>>  find_points(vtkSmartPointer<vtkPolyData> input1, vtkSmartPointer<vtkPolyData> input2){
-    // 获取最大边界，
+    
+    
     double boundsv1[6];
     double boundsv2[6];
+
     input1->GetBounds(boundsv1);
-    //cout<<"r1v1 range:\n"<<"x:("<<boundsv1[0]<<","<<boundsv1[1]<<")\n";
-    //cout<<"y:("<<boundsv1[2]<<","<<boundsv1[3]<<")\n";
+    cout<<"r1v1 range:\n"<<"x:("<<boundsv1[0]<<","<<boundsv1[1]<<")\n";
+    cout<<"y:("<<boundsv1[2]<<","<<boundsv1[3]<<")\n";
+    cout<<"z:("<<boundsv1[4]<<","<<boundsv1[5]<<")\n";
+
     input2->GetBounds(boundsv2);
-    //cout<<"r1v1 range:\n"<<"x:("<<boundsv2[0]<<","<<boundsv2[1]<<")\n";
-    //cout<<"y:("<<boundsv2[2]<<","<<boundsv2[3]<<")\n";
+    cout<<"r1v1 range:\n"<<"x:("<<boundsv2[0]<<","<<boundsv2[1]<<")\n";
+    cout<<"y:("<<boundsv2[2]<<","<<boundsv2[3]<<")\n";
+    cout<<"z:("<<boundsv2[4]<<","<<boundsv2[5]<<")\n";
+
     double mbounds[6];
     max_bounds(boundsv1,boundsv2,mbounds);
 
-    // 合并点集，准备德拉内三角化
+
     auto pointsvector1 = extractpoints(input1);
     auto pointsvector2 = extractpoints(input2);
+
     // 合并点集并标记点的归属
     auto points = mergePointSets(pointsvector1, pointsvector2);
     // 切割平面的质心和法向量
@@ -344,7 +363,10 @@ std::tuple<vtkSmartPointer<vtkPolyData>,std::vector<Eigen::Vector3d>>  find_poin
         }
     }
     //size = 32404
-    //cout<<"size = "<<points_for_fitting.size()<<"\n";
+    cout<<"size = "<<points_for_fitting.size()<<"\n";
+
+    //downsamplePoints(points_for_fitting,200+i*10);
+    //cout<<"size_processed = "<<points_for_fitting.size()<<"\n";
 
     // 均匀稀疏化
     points_for_fitting = uniformSampling(points_for_fitting,10000);
@@ -352,6 +374,8 @@ std::tuple<vtkSmartPointer<vtkPolyData>,std::vector<Eigen::Vector3d>>  find_poin
     
     auto filtered_points = Filter_points(points_for_fitting,mbounds);
     cout<<"size_processed = "<<filtered_points.size()<<"\n";
+    
+
 
     vtkSmartPointer<vtkPoints> vtk_points = vtkSmartPointer<vtkPoints>::New();
     for (const auto& point : filtered_points) {
@@ -361,8 +385,10 @@ std::tuple<vtkSmartPointer<vtkPolyData>,std::vector<Eigen::Vector3d>>  find_poin
     // 2. 创建 PolyData 并设置点集
     vtkSmartPointer<vtkPolyData> polyData_points = vtkSmartPointer<vtkPolyData>::New();
     polyData_points->SetPoints(vtk_points);
-
-    auto vtk_points_denoise = denoisePointCloud(polyData_points);
-
+    double cleanTolerance = 1; // 合并容差
+    double leafSizeX = 1; // 体素大小
+    double leafSizeY = 1;
+    double leafSizeZ = 1;
+    auto vtk_points_denoise = denoisePointCloud(polyData_points,cleanTolerance,leafSizeX,leafSizeY,leafSizeZ);
     return std::make_tuple(vtk_points_denoise,filtered_points);
 }
